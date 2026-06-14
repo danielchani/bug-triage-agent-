@@ -1,0 +1,17 @@
+Subject: CRITICAL - Authentication bypass via JWT "alg: none"
+
+Our production API (v2.3.1) accepts JWT tokens with the "alg" header set to
+"none" and skips signature verification entirely. Anyone can forge an admin
+token and access any user's account or the admin endpoints.
+
+Steps to reproduce:
+1. Decode any valid JWT and strip the signature.
+2. Set the "alg" header field to "none".
+3. Send the modified token as the Authorization header to /api/admin/users.
+4. The server returns the admin user list without checking the signature.
+
+Expected: requests with alg=none or an invalid signature should return 401.
+Actual: the server accepts the token and returns the requested data.
+
+Environment: Production, Linux containers, API v2.3.1.
+Reported by: security-research@example.com

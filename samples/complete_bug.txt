@@ -1,0 +1,25 @@
+Subject: CSV export throws an exception when a "Notes" field contains a comma
+
+When exporting the Monthly Sales report to CSV, any row whose "Notes" field
+contains a comma causes the export to fail with the error below instead of
+properly quoting the field.
+
+Steps to reproduce:
+1. Create a record with Notes = "Great, repeat customer".
+2. Open the Monthly Sales report.
+3. Click "Export to CSV".
+
+Expected: the CSV is generated with the Notes field properly quoted, e.g.
+..., "Great, repeat customer", ...
+
+Actual: the export fails immediately with this stack trace:
+
+Traceback (most recent call last):
+  File "reports/export.py", line 42, in export_csv
+    writer.writerow(row)
+  File "reports/csv_writer.py", line 18, in writerow
+    raise CsvFieldError("Unescaped delimiter in field: Notes")
+reports.csv_writer.CsvFieldError: Unescaped delimiter in field: Notes
+
+Environment: Web app v4.12.1, Windows 11, Chrome 125.
+Reported by: ops-team@example.com

@@ -1,0 +1,5 @@
+Subject: App crashes sometimes
+
+The app just crashes on me randomly, it's really annoying and happens a lot.
+Please fix this ASAP! It closes itself out of nowhere, sometimes right after
+I open it and sometimes after using it for a while.

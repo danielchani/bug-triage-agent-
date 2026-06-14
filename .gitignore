@@ -1,0 +1,13 @@
+# Environment
+.venv/
+.env
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# Editors
+.vscode/
+.idea/

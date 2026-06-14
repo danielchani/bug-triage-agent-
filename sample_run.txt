@@ -1,0 +1,70 @@
+Sample run - bonus request_info / human-approval flow
+=======================================================
+
+Command (with BUG_TRIAGE_MOCK_LLM=true in .env, so no OpenAI API key is needed):
+
+    python -m bug_triage.main samples/invalid_needs_approval.txt --auto-approve
+
+Input report (samples/invalid_needs_approval.txt):
+
+    Subject: Dark mode resets to light mode after logout/login (again)
+
+    I reported this exact issue last month as ticket #4821 and support said it was
+    a known issue being worked on, but it's still happening so I'm filing again
+    since support asked me to open a fresh ticket.
+
+    Steps to reproduce:
+    1. Enable dark mode in Settings.
+    2. Log out.
+    3. Log back in.
+
+    Expected: dark mode should stay enabled, as discussed in #4821.
+    Actual: the app reverts to light mode every time I log back in.
+
+    Environment: iOS app v6.2.0, iPhone 14.
+
+Streamed output:
+
+[executor_started] preprocess
+[executor_completed] preprocess
+[executor_started] classifier
+[executor_completed] classifier
+[executor_started] router
+[executor_completed] router
+[route] -> needs_human_approval_to_close
+[route] requires_human=True risky_action=True
+[route] Category 'duplicate' suggests closing/rejecting this report, which requires human approval before acting.
+[executor_started] needs_human_approval_to_close
+[request_info] needs_human_approval_to_close is requesting human approval:
+  summary: Subject: Dark mode resets to light mode after logout/login (again)
+  category: duplicate
+  proposed_action: Close this report as duplicate.
+  reasoning: Mock classifier: report references an existing ticket/issue, likely a duplicate.
+[executor_completed] needs_human_approval_to_close
+[executor_started] needs_human_approval_to_close
+[output] needs_human_approval_to_close:
+ACTION TAKEN: closed/rejected
+Category: duplicate
+Close this report as duplicate.
+Reasoning: Mock classifier: report references an existing ticket/issue, likely a duplicate.
+[executor_completed] needs_human_approval_to_close
+
+Notes
+-----
+- preprocess, classifier, and router all completed successfully before the
+  workflow paused on the [request_info] event, which is the bonus
+  human-in-the-loop gate implemented in
+  src/bug_triage/actions.py:NeedsHumanApprovalExecutor.
+- The chosen route was "needs_human_approval_to_close" (a duplicate report,
+  per src/bug_triage/router.py's rule 3).
+- Running the same command with --auto-reject instead produces the same
+  events up to [request_info], followed by:
+
+      [output] needs_human_approval_to_close:
+      ACTION TAKEN: escalated_to_human_review
+      Category: duplicate
+      A human reviewer rejected the proposed action ('Close this report as
+      duplicate.'); this report needs manual review.
+
+- Without --auto-approve/--auto-reject, the CLI prompts interactively with
+  "Approve this action? [y/n]: " at the [request_info] pause.

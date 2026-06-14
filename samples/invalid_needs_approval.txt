@@ -1,0 +1,15 @@
+Subject: Dark mode resets to light mode after logout/login (again)
+
+I reported this exact issue last month as ticket #4821 and support said it was
+a known issue being worked on, but it's still happening so I'm filing again
+since support asked me to open a fresh ticket.
+
+Steps to reproduce:
+1. Enable dark mode in Settings.
+2. Log out.
+3. Log back in.
+
+Expected: dark mode should stay enabled, as discussed in #4821.
+Actual: the app reverts to light mode every time I log back in.
+
+Environment: iOS app v6.2.0, iPhone 14.
