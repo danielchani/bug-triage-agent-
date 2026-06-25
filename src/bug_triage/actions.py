@@ -12,6 +12,20 @@ from agent_framework import Executor, WorkflowContext, executor, handler, respon
 from bug_triage.models import ApprovalRequest, RoutedBugReport
 
 
+@executor(id="low_confidence_review")
+async def low_confidence_review_executor(report: RoutedBugReport, ctx: WorkflowContext[None, str]) -> None:
+    """Human-review summary for reports the classifier wasn't confident about."""
+    c = report.classification
+    output = (
+        "LOW CONFIDENCE — HUMAN REVIEW NEEDED\n"
+        f"Confidence: {c.confidence:.0%} | Reason: {c.confidence_reason}\n"
+        f"Category: {c.category} | Urgency: {c.urgency} | Sentiment: {c.sentiment}\n"
+        f"Reasoning: {c.reasoning}\n\n"
+        f"Original report:\n{report.preprocessed.sanitized_text}"
+    )
+    await ctx.yield_output(output)
+
+
 @executor(id="escalate_to_human")
 async def escalate_to_human_executor(report: RoutedBugReport, ctx: WorkflowContext[None, str]) -> None:
     """Prints a human escalation summary for security/critical reports."""

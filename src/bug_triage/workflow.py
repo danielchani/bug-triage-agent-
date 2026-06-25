@@ -14,6 +14,7 @@ from bug_triage.actions import (
     ask_for_missing_info_executor,
     create_developer_summary_executor,
     escalate_to_human_executor,
+    low_confidence_review_executor,
 )
 from bug_triage.classifier_agent import classifier_executor
 from bug_triage.preprocess import preprocess_executor
@@ -33,6 +34,10 @@ def build_workflow() -> Workflow:
                 Case(
                     condition=lambda r: r.decision.route == "escalate_to_human",
                     target=escalate_to_human_executor,
+                ),
+                Case(
+                    condition=lambda r: r.decision.route == "low_confidence_review",
+                    target=low_confidence_review_executor,
                 ),
                 Case(
                     condition=lambda r: r.decision.route == "ask_for_missing_info",
