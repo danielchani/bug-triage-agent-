@@ -1,10 +1,11 @@
 """CLI entrypoint for running bug reports through the triage workflow.
 
 Usage:
-    python -m bug_triage.main samples/<file>.txt [--auto-approve | --auto-reject]
-    python -m bug_triage.main -                         # read from stdin
+    python -m bug_triage.main samples/<file>.txt        # single file
+    python -m bug_triage.main --stdin                   # read from stdin
     python -m bug_triage.main --batch samples/          # all .txt files in folder
     python -m bug_triage.main --csv reports.csv         # CSV with a "text" column
+    python -m bug_triage.main samples/foo.txt --audit-log outputs/audit.jsonl
 
 Streamed event tags (WorkflowEvent.type -> printed prefix):
     executor_invoked   -> [executor_started]
@@ -68,8 +69,12 @@ async def run_report(
     source: str,
     auto_approve: bool | None,
     *,
-    no_audit: bool = False,
+    audit_log: Path | None = None,
 ) -> None:
+    if not raw_text.strip():
+        print(f"[error] Empty input from {source!r} — skipping.", file=sys.stderr)
+        return
+
     workflow = build_workflow()
     report = BugReportInput(raw_text=raw_text, source=source)
 
@@ -93,15 +98,15 @@ async def run_report(
         human_decision = _ask_for_approval(auto_approve)
         stream = workflow.run(stream=True, responses={pending_request_id: human_decision})
 
-    if not no_audit and routed_report is not None:
+    if audit_log is not None and routed_report is not None:
         entry = build_audit_entry(
-            source=source,
+            input_source=source,
             classification=routed_report.classification,
             decision=routed_report.decision,
             preprocessed=routed_report.preprocessed,
             human_decision=human_decision,
         )
-        append_audit_entry(entry)
+        append_audit_entry(entry, log_path=audit_log)
 
 
 def _read_csv_reports(csv_path: Path) -> list[tuple[str, str]]:
@@ -132,12 +137,16 @@ def _read_csv_reports(csv_path: Path) -> list[tuple[str, str]]:
     return results
 
 
-async def run_file(path: Path, auto_approve: bool | None, *, no_audit: bool = False) -> None:
+async def run_file(
+    path: Path, auto_approve: bool | None, *, audit_log: Path | None = None
+) -> None:
     raw_text = path.read_text(encoding="utf-8")
-    await run_report(raw_text, str(path), auto_approve, no_audit=no_audit)
+    await run_report(raw_text, str(path), auto_approve, audit_log=audit_log)
 
 
-async def run_batch(folder: Path, auto_approve: bool | None, *, no_audit: bool = False) -> None:
+async def run_batch(
+    folder: Path, auto_approve: bool | None, *, audit_log: Path | None = None
+) -> None:
     txt_files = sorted(folder.glob("*.txt"))
     if not txt_files:
         print(f"No .txt files found in {folder}")
@@ -146,10 +155,15 @@ async def run_batch(folder: Path, auto_approve: bool | None, *, no_audit: bool =
         if i > 0:
             print("\n" + "─" * 60)
         print(f"\n[batch] Processing: {path.name}")
-        await run_file(path, auto_approve, no_audit=no_audit)
+        try:
+            await run_file(path, auto_approve, audit_log=audit_log)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[batch] ERROR processing {path.name}: {exc}", file=sys.stderr)
 
 
-async def run_csv(csv_path: Path, auto_approve: bool | None, *, no_audit: bool = False) -> None:
+async def run_csv(
+    csv_path: Path, auto_approve: bool | None, *, audit_log: Path | None = None
+) -> None:
     reports = _read_csv_reports(csv_path)
     if not reports:
         print(f"No non-empty rows found in {csv_path}")
@@ -158,7 +172,7 @@ async def run_csv(csv_path: Path, auto_approve: bool | None, *, no_audit: bool =
         if i > 0:
             print("\n" + "─" * 60)
         print(f"\n[csv] Processing: {source}")
-        await run_report(raw_text, source, auto_approve, no_audit=no_audit)
+        await run_report(raw_text, source, auto_approve, audit_log=audit_log)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -169,8 +183,9 @@ def main(argv: list[str] | None = None) -> int:
         "report_path",
         nargs="?",
         type=Path,
-        help="Path to a raw bug report .txt file, or '-' to read from stdin.",
+        help="Path to a raw bug report .txt file.",
     )
+    input_group.add_argument("--stdin", action="store_true", help="Read report text from standard input.")
     input_group.add_argument("--batch", type=Path, metavar="FOLDER", help="Triage all .txt files in FOLDER.")
     input_group.add_argument("--csv", type=Path, metavar="FILE", help="Triage reports from a CSV file (needs a 'text' column).")
 
@@ -178,7 +193,12 @@ def main(argv: list[str] | None = None) -> int:
     approval_group.add_argument("--auto-approve", action="store_true", help="Automatically approve any human-approval request.")
     approval_group.add_argument("--auto-reject", action="store_true", help="Automatically reject any human-approval request.")
 
-    parser.add_argument("--no-audit", action="store_true", help="Skip writing to the audit log.")
+    parser.add_argument(
+        "--audit-log",
+        type=Path,
+        metavar="FILE",
+        help="Append JSONL audit entries to FILE (parent directories are created if needed).",
+    )
 
     args = parser.parse_args(argv)
 
@@ -188,17 +208,20 @@ def main(argv: list[str] | None = None) -> int:
     elif args.auto_reject:
         auto_approve = False
 
-    no_audit: bool = args.no_audit
+    audit_log: Path | None = args.audit_log
 
     if args.batch:
-        asyncio.run(run_batch(args.batch, auto_approve, no_audit=no_audit))
+        asyncio.run(run_batch(args.batch, auto_approve, audit_log=audit_log))
     elif args.csv:
-        asyncio.run(run_csv(args.csv, auto_approve, no_audit=no_audit))
-    elif args.report_path is None or str(args.report_path) == "-":
+        asyncio.run(run_csv(args.csv, auto_approve, audit_log=audit_log))
+    elif args.stdin:
         raw_text = sys.stdin.read()
-        asyncio.run(run_report(raw_text, "stdin", auto_approve, no_audit=no_audit))
+        asyncio.run(run_report(raw_text, "stdin", auto_approve, audit_log=audit_log))
+    elif args.report_path is not None:
+        asyncio.run(run_file(args.report_path, auto_approve, audit_log=audit_log))
     else:
-        asyncio.run(run_file(args.report_path, auto_approve, no_audit=no_audit))
+        parser.print_help()
+        return 1
 
     return 0
 
