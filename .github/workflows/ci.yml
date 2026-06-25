@@ -24,6 +24,9 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev]"
 
+      - name: Lint with ruff
+        run: ruff check .
+
       - name: Run tests (offline — no API key needed)
         env:
           BUG_TRIAGE_MOCK_LLM: "true"
