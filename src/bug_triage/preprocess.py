@@ -10,6 +10,7 @@ import re
 from agent_framework import WorkflowContext, executor
 
 from bug_triage.models import BugReportInput, PreprocessedBugReport
+from bug_triage.red_flags import check_red_flags
 
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 _ISSUE_ID_RE = re.compile(r"#\d+|\b[A-Z]{2,}-\d+\b")
@@ -54,6 +55,8 @@ def preprocess(report: BugReportInput) -> PreprocessedBugReport:
 
     has_stack_trace = bool(_STACK_TRACE_RE.search(text))
 
+    triggered = check_red_flags(sanitized_text)
+
     return PreprocessedBugReport(
         original_text=text,
         sanitized_text=sanitized_text,
@@ -62,6 +65,7 @@ def preprocess(report: BugReportInput) -> PreprocessedBugReport:
         extracted_version=extracted_version,
         extracted_os=extracted_os,
         has_stack_trace=has_stack_trace,
+        red_flags_triggered=[rf.rule_id for rf in triggered],
     )
 
 
