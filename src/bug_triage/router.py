@@ -5,28 +5,52 @@ the workflow's switch-case routing is driven entirely by this pure,
 fully-unit-tested function - it is the final routing authority, per AGENTS.md.
 
 Priority order (first match wins):
-  1. category == "security" or urgency == "critical"  -> escalate_to_human
-  2. missing_info is non-empty                        -> ask_for_missing_info
-  3. category in {duplicate, spam, invalid}           -> needs_human_approval_to_close
-  4. otherwise                                        -> create_developer_summary
+  0. red_flags_triggered is non-empty               -> escalate_to_human (hard override)
+  1. category == "security" or urgency == "critical" -> escalate_to_human
+  2. confidence == "low"                             -> escalate_to_human
+  3. missing_info is non-empty                       -> ask_for_missing_info
+  4. category in {duplicate, spam, invalid}          -> needs_human_approval_to_close
+  5. otherwise                                       -> create_developer_summary
 
 This module has no LLM/network dependency.
 """
 
+from __future__ import annotations
+
 from agent_framework import WorkflowContext, executor
 
-from bug_triage.models import BugClassification, ClassifiedBugReport, RouteDecision, RoutedBugReport
+from bug_triage.models import BugClassification, ClassifiedBugReport, PreprocessedBugReport, RouteDecision, RoutedBugReport
 
 _NOT_A_BUG_CATEGORIES = {"duplicate", "spam", "invalid"}
 
 
-def decide_route(classification: BugClassification) -> RouteDecision:
+def decide_route(
+    classification: BugClassification,
+    preprocessed: PreprocessedBugReport | None = None,
+) -> RouteDecision:
+    if preprocessed is not None and preprocessed.red_flags_triggered:
+        rules = ", ".join(preprocessed.red_flags_triggered)
+        return RouteDecision(
+            route="escalate_to_human",
+            requires_human=True,
+            risky_action=False,
+            explanation=f"Deterministic red-flag rules triggered: {rules}.",
+        )
+
     if classification.category == "security" or classification.urgency == "critical":
         return RouteDecision(
             route="escalate_to_human",
             requires_human=True,
             risky_action=False,
             explanation="Security-related or critical-urgency reports are escalated directly to a human.",
+        )
+
+    if classification.confidence == "low":
+        return RouteDecision(
+            route="escalate_to_human",
+            requires_human=True,
+            risky_action=False,
+            explanation="Low classifier confidence — report is ambiguous; escalated for human review.",
         )
 
     if classification.missing_info:
@@ -60,7 +84,7 @@ def decide_route(classification: BugClassification) -> RouteDecision:
 @executor(id="router")
 async def router_executor(report: ClassifiedBugReport, ctx: WorkflowContext[RoutedBugReport]) -> None:
     """Computes the final route and forwards a RoutedBugReport to the switch-case edges."""
-    decision = decide_route(report.classification)
+    decision = decide_route(report.classification, report.preprocessed)
     await ctx.send_message(
         RoutedBugReport(
             preprocessed=report.preprocessed,

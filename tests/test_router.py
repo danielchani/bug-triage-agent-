@@ -9,6 +9,7 @@ def _classification(**overrides) -> BugClassification:
         category="bug",
         urgency="low",
         sentiment="calm",
+        confidence="high",
         missing_info=[],
         route="create_developer_summary",
         reasoning="test",
@@ -39,6 +40,10 @@ def _classification(**overrides) -> BugClassification:
         ({"category": "feature_request", "urgency": "low"}, "create_developer_summary"),
         ({"category": "performance", "urgency": "high"}, "create_developer_summary"),
         ({"category": "other", "urgency": "low"}, "create_developer_summary"),
+        # Low confidence escalates before missing_info check.
+        ({"category": "bug", "urgency": "medium", "confidence": "low"}, "escalate_to_human"),
+        # Security/critical still wins even at low confidence.
+        ({"category": "security", "urgency": "low", "confidence": "low"}, "escalate_to_human"),
     ],
 )
 def test_decide_route(overrides, expected_route):
@@ -71,3 +76,17 @@ def test_explanation_mentions_missing_fields():
     decision = decide_route(_classification(category="bug", missing_info=["version", "os"]))
     assert "version" in decision.explanation
     assert "os" in decision.explanation
+
+
+def test_low_confidence_escalates_not_risky():
+    decision = decide_route(_classification(category="bug", urgency="medium", confidence="low"))
+    assert decision.route == "escalate_to_human"
+    assert decision.requires_human is True
+    assert decision.risky_action is False
+    assert "confidence" in decision.explanation.lower()
+
+
+def test_security_explanation_not_overridden_by_low_confidence():
+    decision = decide_route(_classification(category="security", urgency="low", confidence="low"))
+    assert decision.route == "escalate_to_human"
+    assert "security" in decision.explanation.lower() or "critical" in decision.explanation.lower()

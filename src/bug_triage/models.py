@@ -10,6 +10,7 @@ BugCategory = Literal[
 ]
 UrgencyLevel = Literal["low", "medium", "high", "critical"]
 SentimentLevel = Literal["calm", "frustrated", "angry"]
+ConfidenceLevel = Literal["low", "medium", "high"]
 RouteName = Literal[
     "escalate_to_human", "ask_for_missing_info", "create_developer_summary", "needs_human_approval_to_close"
 ]
@@ -33,6 +34,7 @@ class PreprocessedBugReport(BaseModel):
     extracted_version: str | None = None
     extracted_os: str | None = None
     has_stack_trace: bool = False
+    red_flags_triggered: list[str] = Field(default_factory=list)
 
 
 class BugClassification(BaseModel):
@@ -41,6 +43,7 @@ class BugClassification(BaseModel):
     category: BugCategory
     urgency: UrgencyLevel
     sentiment: SentimentLevel
+    confidence: ConfidenceLevel
     missing_info: list[str] = Field(default_factory=list)
     route: RouteName
     reasoning: str

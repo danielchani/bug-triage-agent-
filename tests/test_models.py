@@ -26,6 +26,7 @@ def test_preprocessed_bug_report_defaults():
     assert pre.extracted_version is None
     assert pre.extracted_os is None
     assert pre.has_stack_trace is False
+    assert pre.red_flags_triggered == []
 
 
 def test_bug_classification_valid():
@@ -33,11 +34,13 @@ def test_bug_classification_valid():
         category="security",
         urgency="critical",
         sentiment="calm",
+        confidence="high",
         missing_info=[],
         route="escalate_to_human",
         reasoning="Auth bypass is a critical security issue.",
     )
     assert classification.category == "security"
+    assert classification.confidence == "high"
     assert classification.missing_info == []
 
 
@@ -47,6 +50,7 @@ def test_bug_classification_rejects_invalid_category():
             category="not-a-real-category",
             urgency="low",
             sentiment="calm",
+            confidence="high",
             route="create_developer_summary",
             reasoning="x",
         )
@@ -58,7 +62,20 @@ def test_bug_classification_rejects_invalid_route():
             category="bug",
             urgency="low",
             sentiment="calm",
+            confidence="high",
             route="not-a-real-route",
+            reasoning="x",
+        )
+
+
+def test_bug_classification_rejects_invalid_confidence():
+    with pytest.raises(ValidationError):
+        BugClassification(
+            category="bug",
+            urgency="low",
+            sentiment="calm",
+            confidence="very-high",
+            route="create_developer_summary",
             reasoning="x",
         )
 
@@ -80,6 +97,7 @@ def test_classified_and_routed_bug_report_roundtrip():
         category="bug",
         urgency="medium",
         sentiment="calm",
+        confidence="medium",
         missing_info=["steps_to_reproduce"],
         route="ask_for_missing_info",
         reasoning="Not enough detail.",

@@ -55,11 +55,25 @@ def test_security_report_escalates_to_human():
     assert any("ESCALATED TO HUMAN" in output for output in outputs)
 
 
-def test_vague_report_asks_for_missing_info():
+def test_vague_report_low_confidence_escalates_to_human():
+    # 4 missing fields → low confidence → escalate_to_human (not ask_for_missing_info).
     workflow = build_workflow()
     outputs, pending_request_id = asyncio.run(
         _run_until_idle(workflow, "The app crashes sometimes, it's really annoying, please fix ASAP.")
     )
+    assert pending_request_id is None
+    assert any("ESCALATED TO HUMAN" in output for output in outputs)
+
+
+def test_partial_report_asks_for_missing_info():
+    # Has version + OS + steps but missing expected/actual (medium confidence) → ask_for_missing_info.
+    workflow = build_workflow()
+    raw_text = (
+        "App crashes on Windows 11 v4.12.1.\n"
+        "Steps to reproduce: open the app and click Export.\n"
+        "Actual: the app crashes immediately.\n"
+    )
+    outputs, pending_request_id = asyncio.run(_run_until_idle(workflow, raw_text))
     assert pending_request_id is None
     assert any("MORE INFO NEEDED" in output for output in outputs)
 

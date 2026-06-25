@@ -22,7 +22,7 @@ from agent_framework import WorkflowContext, executor
 from agent_framework.openai import OpenAIChatClient
 from dotenv import load_dotenv
 
-from bug_triage.models import BugClassification, ClassifiedBugReport, PreprocessedBugReport, SentimentLevel
+from bug_triage.models import BugClassification, ClassifiedBugReport, ConfidenceLevel, PreprocessedBugReport, SentimentLevel
 
 load_dotenv()
 
@@ -50,6 +50,11 @@ Classify the report using these fields:
   Use "critical" for security issues, outages, or data loss.
 
 - sentiment: one of "calm", "frustrated", "angry" - the reporter's tone.
+
+- confidence: one of "low", "medium", "high". Your certainty in this
+  classification. Use "low" if the report is vague, contradictory, or could
+  reasonably belong to multiple categories; "medium" if most signals are clear
+  but some ambiguity remains; "high" if the category/urgency are unambiguous.
 
 - missing_info: a list of short strings naming details that would be needed
   to act on this report but are absent (e.g. "steps_to_reproduce", "version",
@@ -122,6 +127,17 @@ def _mock_missing_info(report: PreprocessedBugReport, text: str) -> list[str]:
     return missing
 
 
+def _mock_confidence(missing_info: list[str], strong_signal: bool) -> ConfidenceLevel:
+    if strong_signal:
+        return "high"
+    n = len(missing_info)
+    if n == 0:
+        return "high"
+    if n <= 2:
+        return "medium"
+    return "low"
+
+
 def _mock_sentiment(text: str) -> SentimentLevel:
     if any(kw in text for kw in ("unacceptable", "furious", "outrageous", "terrible")):
         return "angry"
@@ -136,11 +152,13 @@ def _mock_classify(report: PreprocessedBugReport) -> BugClassification:
 
     security_keywords = ("security", "vulnerability", "exploit", "bypass", "unauthorized", "csrf", "xss", "injection")
     if any(kw in text for kw in security_keywords):
+        missing_info = _mock_missing_info(report, text)
         return BugClassification(
             category="security",
             urgency="critical",
             sentiment=_mock_sentiment(text),
-            missing_info=_mock_missing_info(report, text),
+            confidence=_mock_confidence(missing_info, strong_signal=True),
+            missing_info=missing_info,
             route="escalate_to_human",
             reasoning="Mock classifier: text mentions security/bypass-related keywords; treated as critical.",
         )
@@ -151,6 +169,7 @@ def _mock_classify(report: PreprocessedBugReport) -> BugClassification:
             category="spam",
             urgency="low",
             sentiment="calm",
+            confidence="high",
             missing_info=[],
             route="needs_human_approval_to_close",
             reasoning="Mock classifier: text looks like promotional/spam content, not a bug report.",
@@ -162,6 +181,7 @@ def _mock_classify(report: PreprocessedBugReport) -> BugClassification:
             category="duplicate",
             urgency="low",
             sentiment=_mock_sentiment(text),
+            confidence="high",
             missing_info=[],
             route="needs_human_approval_to_close",
             reasoning="Mock classifier: report references an existing ticket/issue, likely a duplicate.",
@@ -174,6 +194,7 @@ def _mock_classify(report: PreprocessedBugReport) -> BugClassification:
         category="bug",
         urgency=urgency,
         sentiment=_mock_sentiment(text),
+        confidence=_mock_confidence(missing_info, strong_signal=False),
         missing_info=missing_info,
         route=route,
         reasoning="Mock classifier: generic bug report; route guess based on whether key details are present.",
