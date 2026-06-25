@@ -22,11 +22,14 @@ from agent_framework import WorkflowContext, executor
 from agent_framework.openai import OpenAIChatClient
 from dotenv import load_dotenv
 
-from bug_triage.models import BugClassification, ClassifiedBugReport, ConfidenceLevel, PreprocessedBugReport, SentimentLevel
+from bug_triage.models import BugClassification, ClassifiedBugReport, PreprocessedBugReport, SentimentLevel
 
 load_dotenv()
 
 DEFAULT_MODEL_ID = "gpt-4o-mini"
+
+# Router threshold — keep in sync with router.py:LOW_CONFIDENCE_THRESHOLD
+_LOW_CONFIDENCE_THRESHOLD = 0.60
 
 SYSTEM_PROMPT = """\
 You are a bug triage assistant for a software team.
@@ -51,10 +54,17 @@ Classify the report using these fields:
 
 - sentiment: one of "calm", "frustrated", "angry" - the reporter's tone.
 
-- confidence: one of "low", "medium", "high". Your certainty in this
-  classification. Use "low" if the report is vague, contradictory, or could
-  reasonably belong to multiple categories; "medium" if most signals are clear
-  but some ambiguity remains; "high" if the category/urgency are unambiguous.
+- confidence: a float between 0.0 and 1.0 indicating how certain you are
+  about this classification. Guidelines:
+  - 0.85-1.0 (high): report is concrete, complete, and unambiguous.
+  - 0.60-0.84 (medium): report is plausible but some details are unclear.
+  - 0.0-0.59 (low): report is vague, contradictory, emotional, or could
+    reasonably belong to multiple categories. Reports below 0.60 will be
+    routed to human review rather than automated action.
+
+- confidence_reason: a single sentence explaining why you assigned this
+  confidence level (e.g. "All required fields are present and the failure
+  mode is clear." or "Report is vague with no version, OS, or steps.").
 
 - missing_info: a list of short strings naming details that would be needed
   to act on this report but are absent (e.g. "steps_to_reproduce", "version",
@@ -64,9 +74,8 @@ Classify the report using these fields:
 
 - route: YOUR OWN BEST GUESS at one of "escalate_to_human",
   "ask_for_missing_info", "create_developer_summary",
-  "needs_human_approval_to_close". This is only a proposal - a separate
-  deterministic router makes the final decision, so do your best but don't
-  worry about perfectly matching the rules above.
+  "needs_human_approval_to_close", "low_confidence_review". This is only a
+  proposal - a separate deterministic router makes the final decision.
 
 - reasoning: a short (1-2 sentence) explanation of your classification.
 
@@ -97,12 +106,8 @@ async def _real_classify(report: PreprocessedBugReport, model_id: str | None) ->
     resolved_model_id = model_id or os.environ.get("OPENAI_CHAT_MODEL_ID", DEFAULT_MODEL_ID)
     client = OpenAIChatClient(model=resolved_model_id)
 
-    # API note: `BaseChatClient.as_agent(...)` is the current MAF way to get an
-    # Agent (older examples referencing `ChatAgent` no longer apply). We call the
-    # Agent directly with `agent.run(...)` rather than wrapping it in an
-    # AgentExecutor, so this function and `_mock_classify` below return the exact
-    # same `BugClassification` type regardless of mode - the rest of the
-    # workflow graph is identical either way.
+    # `BaseChatClient.as_agent(...)` is the current MAF way to get an Agent.
+    # Both real and mock paths return the same BugClassification type.
     agent = client.as_agent(
         name="bug-triage-classifier",
         instructions=SYSTEM_PROMPT,
@@ -127,15 +132,34 @@ def _mock_missing_info(report: PreprocessedBugReport, text: str) -> list[str]:
     return missing
 
 
-def _mock_confidence(missing_info: list[str], strong_signal: bool) -> ConfidenceLevel:
+# Confidence float values used by the mock classifier.
+# Values above 0.60 (LOW_CONFIDENCE_THRESHOLD) proceed to normal routing;
+# values below route to low_confidence_review.
+_CONFIDENCE_STRONG_SIGNAL = 0.95  # keywords unambiguously match a category
+_CONFIDENCE_COMPLETE = 0.90       # no missing fields
+_CONFIDENCE_ONE_MISSING = 0.70    # one field absent (above threshold → ask for info)
+_CONFIDENCE_TWO_MISSING = 0.65    # two fields absent (above threshold → ask for info)
+_CONFIDENCE_VAGUE = 0.25          # three or more fields absent (below threshold → human review)
+
+
+def _mock_confidence(missing_count: int, strong_signal: bool) -> float:
     if strong_signal:
-        return "high"
+        return _CONFIDENCE_STRONG_SIGNAL
+    table = {0: _CONFIDENCE_COMPLETE, 1: _CONFIDENCE_ONE_MISSING, 2: _CONFIDENCE_TWO_MISSING}
+    return table.get(missing_count, _CONFIDENCE_VAGUE)
+
+
+def _mock_confidence_reason(missing_info: list[str], strong_signal: bool, category: str) -> str:
+    if strong_signal:
+        return f"Unambiguous keyword match for {category} category."
     n = len(missing_info)
     if n == 0:
-        return "high"
-    if n <= 2:
-        return "medium"
-    return "low"
+        return "All required fields are present (version, OS, steps, expected/actual behaviour)."
+    if n == 1:
+        return f"One field is absent ({missing_info[0]}); report is mostly complete."
+    if n == 2:
+        return f"Two fields are absent ({', '.join(missing_info)}); report has most required context."
+    return f"{n} key fields are absent ({', '.join(missing_info)}); report is too vague to classify with confidence."
 
 
 def _mock_sentiment(text: str) -> SentimentLevel:
@@ -157,7 +181,8 @@ def _mock_classify(report: PreprocessedBugReport) -> BugClassification:
             category="security",
             urgency="critical",
             sentiment=_mock_sentiment(text),
-            confidence=_mock_confidence(missing_info, strong_signal=True),
+            confidence=_mock_confidence(len(missing_info), strong_signal=True),
+            confidence_reason="Unambiguous keyword match for security category.",
             missing_info=missing_info,
             route="escalate_to_human",
             reasoning="Mock classifier: text mentions security/bypass-related keywords; treated as critical.",
@@ -169,7 +194,8 @@ def _mock_classify(report: PreprocessedBugReport) -> BugClassification:
             category="spam",
             urgency="low",
             sentiment="calm",
-            confidence="high",
+            confidence=_CONFIDENCE_STRONG_SIGNAL,
+            confidence_reason="Unambiguous keyword match for spam category.",
             missing_info=[],
             route="needs_human_approval_to_close",
             reasoning="Mock classifier: text looks like promotional/spam content, not a bug report.",
@@ -181,7 +207,8 @@ def _mock_classify(report: PreprocessedBugReport) -> BugClassification:
             category="duplicate",
             urgency="low",
             sentiment=_mock_sentiment(text),
-            confidence="high",
+            confidence=_CONFIDENCE_STRONG_SIGNAL,
+            confidence_reason="Unambiguous keyword match for duplicate category.",
             missing_info=[],
             route="needs_human_approval_to_close",
             reasoning="Mock classifier: report references an existing ticket/issue, likely a duplicate.",
@@ -190,11 +217,14 @@ def _mock_classify(report: PreprocessedBugReport) -> BugClassification:
     missing_info = _mock_missing_info(report, text)
     urgency = "high" if any(kw in text for kw in ("crash", "asap", "urgent", "critical")) else "medium"
     route = "ask_for_missing_info" if missing_info else "create_developer_summary"
+    conf = _mock_confidence(len(missing_info), strong_signal=False)
+    conf_reason = _mock_confidence_reason(missing_info, strong_signal=False, category="bug")
     return BugClassification(
         category="bug",
         urgency=urgency,
         sentiment=_mock_sentiment(text),
-        confidence=_mock_confidence(missing_info, strong_signal=False),
+        confidence=conf,
+        confidence_reason=conf_reason,
         missing_info=missing_info,
         route=route,
         reasoning="Mock classifier: generic bug report; route guess based on whether key details are present.",

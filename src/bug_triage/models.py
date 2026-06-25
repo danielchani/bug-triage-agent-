@@ -10,9 +10,12 @@ BugCategory = Literal[
 ]
 UrgencyLevel = Literal["low", "medium", "high", "critical"]
 SentimentLevel = Literal["calm", "frustrated", "angry"]
-ConfidenceLevel = Literal["low", "medium", "high"]
 RouteName = Literal[
-    "escalate_to_human", "ask_for_missing_info", "create_developer_summary", "needs_human_approval_to_close"
+    "escalate_to_human",
+    "ask_for_missing_info",
+    "create_developer_summary",
+    "needs_human_approval_to_close",
+    "low_confidence_review",
 ]
 
 
@@ -35,15 +38,21 @@ class PreprocessedBugReport(BaseModel):
     extracted_os: str | None = None
     has_stack_trace: bool = False
     red_flags_triggered: list[str] = Field(default_factory=list)
+    red_flags_reason: str | None = None
 
 
 class BugClassification(BaseModel):
-    """Required structured output produced by the classifier agent."""
+    """Required structured output produced by the classifier agent.
+
+    `confidence` is a float in [0.0, 1.0]. The router treats any value below
+    0.60 as insufficiently certain and routes to `low_confidence_review`.
+    """
 
     category: BugCategory
     urgency: UrgencyLevel
     sentiment: SentimentLevel
-    confidence: ConfidenceLevel
+    confidence: float = Field(ge=0.0, le=1.0)
+    confidence_reason: str
     missing_info: list[str] = Field(default_factory=list)
     route: RouteName
     reasoning: str
