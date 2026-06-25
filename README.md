@@ -1,11 +1,16 @@
 # Bug Report Triage Agent
 
+![CI](https://github.com/danielchani/bug-triage-agent/actions/workflows/ci.yml/badge.svg)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![MAF](https://img.shields.io/badge/Microsoft%20Agent%20Framework-1.8.1-informational)
 ![Tests](https://img.shields.io/badge/tests-96%20passing-brightgreen)
 ![Docker](https://img.shields.io/badge/docker-ready-blue)
 
 An agentic workflow that triages incoming bug reports end-to-end: it preprocesses the raw text, classifies it with an LLM into a structured schema, applies deterministic override rules, and routes each report to the right action — all with a typed audit trail and a human-in-the-loop gate for risky decisions.
+
+## Why this exists
+
+Manual bug triage is slow and inconsistent: the same report gets different priority depending on who reads it first. This project automates the triage decision while keeping humans in the loop for the cases that matter — security escalations, ambiguous reports, and risky close/reject actions. It's also a reference implementation of how to compose LLM classification with deterministic safety rules so that the LLM can never silently make a dangerous routing decision on its own.
 
 ---
 
@@ -270,14 +275,29 @@ bug-triage-agent/
 
 ---
 
+## Engineering decisions
+
+| Decision | Rationale |
+|---|---|
+| **Classifier proposes, router decides** | Keeps the LLM out of safety-critical routing logic. `decide_route()` is a pure, fully-tested function — the LLM's `route` suggestion is a hint, not an instruction. |
+| **`confidence` as a Literal enum** | Aligns with the existing taxonomy (all fields are `Literal` types). The router treats `"low"` as a hard escalation trigger, which is easy to test and audit. A float would require a threshold that changes meaning over time. |
+| **Red-flag rules at preprocess time** | Regex patterns run before the LLM, so a dangerous keyword can never be quietly routed to `create_developer_summary`. The `red_flags_triggered` field is stored on `PreprocessedBugReport` and checked first by the router. |
+| **JSONL audit log (not a database)** | Zero dependencies, zero schema migration. A flat file is sufficient for a single-instance CLI tool and trivially importable into any analytics tool. |
+| **Mock classifier with identical output type** | Both real and mock paths return the same `BugClassification` Pydantic model. The entire test suite runs offline with no mocking of the workflow itself — only the API call is replaced. |
+| **MAF `request_info` for human approval** | Uses the framework's built-in pause/resume primitive instead of polling or callbacks. The workflow suspends at a well-defined point and resumes only when the human responds. |
+
+---
+
 ## Quality gates
 
-- **96 tests, all offline** — `pytest` needs no API key; mock classifier covers the same code paths as the real LLM.
-- **Structured output enforced** — `response_format=BugClassification` on the OpenAI call; Pydantic validates every field including the new `confidence` enum.
-- **Deterministic routing** — `decide_route()` is a pure function with 14 parametrized test cases.
-- **Red-flag hard overrides** — 13 parametrized regex tests, each asserting hit or miss independently of the LLM.
-- **Audit log integrity** — Every run writes a verifiable JSONL entry; tested for field correctness and multi-entry appends.
-- **No secrets in repo** — `.env`, `triage_audit.jsonl`, and generated artifacts are gitignored.
+| Gate | What it covers | Count |
+|---|---|---|
+| Offline unit tests (pytest) | Models, preprocess, red-flag rules, router, mock classifier, audit log, batch input | 96 tests |
+| Router truth-table | All 6 routing rules including priority conflicts and confidence override | 14 parametrized cases |
+| Red-flag parametrized tests | Each RF rule: hit and miss, multiple rules triggering | 18 cases |
+| End-to-end workflow tests | All 4 routes, human-approval approve + reject paths | 7 tests |
+| Pydantic validation | Invalid category / route / confidence rejected at model level | 3 negative tests |
+| CI (GitHub Actions) | Runs full test suite on Python 3.10 and 3.12 on every push / PR | `ci.yml` |
 
 ---
 
