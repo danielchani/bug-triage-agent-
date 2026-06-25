@@ -1,0 +1,4 @@
+id,text
+security_report,"JWT authentication bypass vulnerability discovered. The alg:none header is accepted by the token validation endpoint, allowing unauthenticated access to any user account."
+complete_bug,"Export to CSV fails on rows with commas in the Notes field. Steps to reproduce: add a record with a comma in Notes, then click Export. Expected: the row is quoted correctly. Actual: export crashes. Environment: Web app v4.12.1, Windows 11."
+spam_report,"Get 50% off our premium subscription! Use promo code SAVE50 at checkout. Limited time offer - buy now!"
