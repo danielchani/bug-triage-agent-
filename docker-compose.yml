@@ -1,0 +1,10 @@
+services:
+  bug-triage:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./samples:/app/samples:ro
+    stdin_open: true
+    tty: true
