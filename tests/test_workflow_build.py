@@ -1,8 +1,7 @@
 """Tests that the workflow graph builds correctly and runs end-to-end.
 
 These force BUG_TRIAGE_MOCK_LLM=true so they're fully offline - no network
-access or API key required. Async runs are driven with asyncio.run() so no
-extra pytest plugin is needed.
+access or API key required.
 """
 
 import asyncio
@@ -26,6 +25,7 @@ def test_build_workflow_wires_expected_executors():
         "classifier",
         "router",
         "escalate_to_human",
+        "low_confidence_review",
         "ask_for_missing_info",
         "create_developer_summary",
         "needs_human_approval_to_close",
@@ -48,34 +48,34 @@ async def _run_until_idle(workflow, raw_text):
 
 def test_security_report_escalates_to_human():
     workflow = build_workflow()
-    outputs, pending_request_id = asyncio.run(
+    outputs, pending = asyncio.run(
         _run_until_idle(workflow, "There is an authentication bypass vulnerability in the login flow.")
     )
-    assert pending_request_id is None
-    assert any("ESCALATED TO HUMAN" in output for output in outputs)
+    assert pending is None
+    assert any("ESCALATED TO HUMAN" in o for o in outputs)
 
 
-def test_vague_report_low_confidence_escalates_to_human():
-    # 4 missing fields → low confidence → escalate_to_human (not ask_for_missing_info).
+def test_vague_report_low_confidence_routes_to_review():
+    # 4 missing fields → confidence 0.25 → low_confidence_review.
     workflow = build_workflow()
-    outputs, pending_request_id = asyncio.run(
+    outputs, pending = asyncio.run(
         _run_until_idle(workflow, "The app crashes sometimes, it's really annoying, please fix ASAP.")
     )
-    assert pending_request_id is None
-    assert any("ESCALATED TO HUMAN" in output for output in outputs)
+    assert pending is None
+    assert any("LOW CONFIDENCE" in o for o in outputs)
 
 
 def test_partial_report_asks_for_missing_info():
-    # Has version + OS + steps but missing expected/actual (medium confidence) → ask_for_missing_info.
+    # Has version + OS + steps but missing expected/actual (1 field, confidence 0.70) → ask.
     workflow = build_workflow()
     raw_text = (
         "App crashes on Windows 11 v4.12.1.\n"
         "Steps to reproduce: open the app and click Export.\n"
         "Actual: the app crashes immediately.\n"
     )
-    outputs, pending_request_id = asyncio.run(_run_until_idle(workflow, raw_text))
-    assert pending_request_id is None
-    assert any("MORE INFO NEEDED" in output for output in outputs)
+    outputs, pending = asyncio.run(_run_until_idle(workflow, raw_text))
+    assert pending is None
+    assert any("MORE INFO NEEDED" in o for o in outputs)
 
 
 def test_complete_bug_report_creates_developer_summary():
@@ -87,9 +87,9 @@ def test_complete_bug_report_creates_developer_summary():
         "Actual: the export raises an error.\n"
         "Environment: Web app v4.12.1, Windows 11.\n"
     )
-    outputs, pending_request_id = asyncio.run(_run_until_idle(workflow, raw_text))
-    assert pending_request_id is None
-    assert any("DEVELOPER TICKET SUMMARY" in output for output in outputs)
+    outputs, pending = asyncio.run(_run_until_idle(workflow, raw_text))
+    assert pending is None
+    assert any("DEVELOPER TICKET SUMMARY" in o for o in outputs)
 
 
 async def _run_and_resume(workflow, raw_text, *, approved):
@@ -106,15 +106,15 @@ async def _run_and_resume(workflow, raw_text, *, approved):
 
 def test_duplicate_report_pauses_for_approval_then_closes_on_approval():
     workflow = build_workflow()
-    raw_text = "This is the same as ticket #4821, already reported last month."
-
-    resumed_outputs = asyncio.run(_run_and_resume(workflow, raw_text, approved=True))
-    assert any("closed/rejected" in output for output in resumed_outputs)
+    resumed = asyncio.run(
+        _run_and_resume(workflow, "This is the same as ticket #4821, already reported last month.", approved=True)
+    )
+    assert any("closed/rejected" in o for o in resumed)
 
 
 def test_duplicate_report_escalates_on_rejection():
     workflow = build_workflow()
-    raw_text = "This is the same as ticket #4821, already reported last month."
-
-    resumed_outputs = asyncio.run(_run_and_resume(workflow, raw_text, approved=False))
-    assert any("escalated_to_human_review" in output for output in resumed_outputs)
+    resumed = asyncio.run(
+        _run_and_resume(workflow, "This is the same as ticket #4821, already reported last month.", approved=False)
+    )
+    assert any("escalated_to_human_review" in o for o in resumed)

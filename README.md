@@ -3,7 +3,7 @@
 ![CI](https://github.com/danielchani/bug-triage-agent/actions/workflows/ci.yml/badge.svg)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![MAF](https://img.shields.io/badge/Microsoft%20Agent%20Framework-1.8.1-informational)
-![Tests](https://img.shields.io/badge/tests-96%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-134%20passing-brightgreen)
 ![Docker](https://img.shields.io/badge/docker-ready-blue)
 
 An agentic workflow that triages incoming bug reports end-to-end: it preprocesses the raw text, classifies it with an LLM into a structured schema, applies deterministic override rules, and routes each report to the right action — all with a typed audit trail and a human-in-the-loop gate for risky decisions.
@@ -134,7 +134,10 @@ python -m bug_triage.main --batch samples/
 python -m bug_triage.main --csv samples/batch_sample.csv
 
 # Read from stdin
-echo "App crashes on startup, Windows 11 v2.3.1. Steps: open app." | python -m bug_triage.main -
+echo "App crashes on startup, Windows 11 v2.3.1. Steps: open app." | python -m bug_triage.main --stdin
+
+# Write audit log
+python -m bug_triage.main samples/complete_bug.txt --audit-log outputs/audit.jsonl
 ```
 
 ---
@@ -201,7 +204,7 @@ The router (`src/bug_triage/router.py`) picks exactly one route in priority orde
 |---|---|---|---|---|
 | 0 | `red_flags_triggered` non-empty | `escalate_to_human` | Yes | No |
 | 1 | `category == "security"` or `urgency == "critical"` | `escalate_to_human` | Yes | No |
-| 2 | `confidence == "low"` | `escalate_to_human` | Yes | No |
+| 2 | `confidence < 0.60` | `low_confidence_review` | Yes | No |
 | 3 | `missing_info` non-empty | `ask_for_missing_info` | No | No |
 | 4 | `category` in `{duplicate, spam, invalid}` | `needs_human_approval_to_close` | Yes | Yes |
 | 5 | otherwise | `create_developer_summary` | No | No |

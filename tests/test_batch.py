@@ -1,8 +1,6 @@
-"""Tests for the expanded input surface: stdin, batch folder, CSV (main.py)."""
+"""Tests for the expanded input surface: --stdin, --batch, --csv (main.py)."""
 
 import asyncio
-import os
-from io import StringIO
 from pathlib import Path
 
 import pytest
@@ -13,6 +11,15 @@ from bug_triage.main import _read_csv_reports, run_batch, run_csv, run_report
 @pytest.fixture(autouse=True)
 def _mock_llm(monkeypatch):
     monkeypatch.setenv("BUG_TRIAGE_MOCK_LLM", "true")
+
+
+_COMPLETE_REPORT = (
+    "Export to CSV fails on rows with commas.\n"
+    "Steps to reproduce: add a record with a comma in Notes, then export.\n"
+    "Expected: the row is quoted correctly.\n"
+    "Actual: the export raises an error.\n"
+    "Environment: Web app v4.12.1, Windows 11.\n"
+)
 
 
 # ── CSV parsing ───────────────────────────────────────────────────────────────
@@ -57,44 +64,46 @@ def test_read_csv_reports_raises_on_missing_column(tmp_path: Path):
 # ── stdin run ─────────────────────────────────────────────────────────────────
 
 def test_run_report_stdin_does_not_raise():
-    raw_text = (
-        "Export to CSV fails on rows with commas.\n"
-        "Steps to reproduce: add a record with a comma in Notes, then export.\n"
-        "Expected: the row is quoted correctly.\n"
-        "Actual: the export raises an error.\n"
-        "Environment: Web app v4.12.1, Windows 11.\n"
-    )
-    asyncio.run(run_report(raw_text, "stdin", auto_approve=None, no_audit=True))
+    asyncio.run(run_report(_COMPLETE_REPORT, "stdin", auto_approve=None))
+
+
+def test_run_report_empty_input_does_not_raise():
+    asyncio.run(run_report("   ", "stdin", auto_approve=None))
 
 
 # ── batch folder run ──────────────────────────────────────────────────────────
 
 def test_run_batch_processes_all_txt_files(tmp_path: Path):
-    (tmp_path / "a.txt").write_text(
-        "Export to CSV fails.\nSteps to reproduce: click Export.\n"
-        "Expected: file downloads. Actual: page crashes.\nVersion: v2.0.0. OS: Windows 11.\n",
-        encoding="utf-8",
-    )
-    (tmp_path / "b.txt").write_text(
-        "Export to CSV fails.\nSteps to reproduce: click Export.\n"
-        "Expected: file downloads. Actual: page crashes.\nVersion: v2.0.0. OS: Windows 11.\n",
-        encoding="utf-8",
-    )
-    asyncio.run(run_batch(tmp_path, auto_approve=None, no_audit=True))
+    for name in ("a.txt", "b.txt"):
+        (tmp_path / name).write_text(_COMPLETE_REPORT, encoding="utf-8")
+    asyncio.run(run_batch(tmp_path, auto_approve=None))
 
 
 def test_run_batch_empty_folder_does_not_raise(tmp_path: Path):
-    asyncio.run(run_batch(tmp_path, auto_approve=None, no_audit=True))
+    asyncio.run(run_batch(tmp_path, auto_approve=None))
+
+
+def test_run_batch_continues_on_failure(tmp_path: Path, capsys):
+    # First file is valid; second file will fail (we make it a directory to force a read error).
+    (tmp_path / "a.txt").write_text(_COMPLETE_REPORT, encoding="utf-8")
+    bad = tmp_path / "b.txt"
+    bad.mkdir()  # creates a directory with .txt name — reading it raises IsADirectoryError
+    asyncio.run(run_batch(tmp_path, auto_approve=None))
+    stderr = capsys.readouterr().err
+    assert "ERROR" in stderr  # error reported but run didn't abort
+
+
+def test_run_batch_writes_audit_log(tmp_path: Path):
+    (tmp_path / "report.txt").write_text(_COMPLETE_REPORT, encoding="utf-8")
+    log = tmp_path / "audit.jsonl"
+    asyncio.run(run_batch(tmp_path, auto_approve=None, audit_log=log))
+    assert log.exists()
+    assert log.stat().st_size > 0
 
 
 # ── CSV run ───────────────────────────────────────────────────────────────────
 
 def test_run_csv_processes_reports(tmp_path: Path):
     csv_file = tmp_path / "reports.csv"
-    csv_file.write_text(
-        "text\n"
-        "Export to CSV fails. Steps to reproduce: click Export. "
-        "Expected: file downloads. Actual: crash. Version v2.0.0. OS: Windows 11.\n",
-        encoding="utf-8",
-    )
-    asyncio.run(run_csv(csv_file, auto_approve=None, no_audit=True))
+    csv_file.write_text(f"text\n{_COMPLETE_REPORT}\n", encoding="utf-8")
+    asyncio.run(run_csv(csv_file, auto_approve=None))
